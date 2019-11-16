@@ -65,7 +65,8 @@ RUN echo "/usr/local/cuda-10.0/targets/x86_64-linux/lib/stubs" > /etc/ld.so.conf
 
 # Add Swift to the PATH
 ENV PATH="$PATH:/swift-tensorflow-toolchain/usr/bin/"
-
+## 容器中文乱码问题
+ENV LANG C.UTF-8
 # Run jupyter on startup
 EXPOSE 8888
 RUN mkdir /notebooks
