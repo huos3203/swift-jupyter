@@ -12,11 +12,9 @@ ipywidgets==7.4.2
 jedi==0.13.2
 Jinja2==2.10
 jsonschema==2.6.0
-jupyter==1.0.0
 jupyter-client==5.2.4
 jupyter-console==6.0.0
 jupyter-core==4.4.0
-jupyter-kernel-test==0.3
 MarkupSafe==1.1.0
 mistune==0.8.4
 nbconvert==5.4.0
@@ -46,3 +44,8 @@ jupyterlab==1.2.3
 jupyterlab_templates
 jupyterlab-git
 knowledge-repo[all]
+jupyter
+pandas
+matplotlib
+numpy
+jupyter-kernel-test

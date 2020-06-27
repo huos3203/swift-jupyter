@@ -38,21 +38,25 @@ def get_kernel_code_name(kernel_name):
     return kernel_code_name
 
 
-def linux_lldb_python_lib_subdir():
-    return 'lib/python%d.%d/site-packages' % (sys.version_info[0],
-                                              sys.version_info[1])
+def linux_pythonpath(root):
+    old_dir = '%s/lib/python%d.%d/site-packages' % (root,
+                                                    sys.version_info[0],
+                                                    sys.version_info[1])
+    if os.path.isdir(old_dir):
+        return old_dir
+
+    return '%s/lib/python%s/dist-packages' % (root, sys.version_info[0])
 
 
 def make_kernel_env(args):
-    """Returns environment varialbes that tell the kernel where things are."""
+    """Returns environment variables that tell the kernel where things are."""
 
     kernel_env = {}
 
     if args.swift_toolchain is not None:
         # Use a prebuilt Swift toolchain.
         if platform.system() == 'Linux':
-            kernel_env['PYTHONPATH'] = '%s/usr/%s' % (
-                args.swift_toolchain, linux_lldb_python_lib_subdir())
+            kernel_env['PYTHONPATH'] = linux_pythonpath(args.swift_toolchain + '/usr')
             kernel_env['LD_LIBRARY_PATH'] = '%s/usr/lib/swift/linux' % args.swift_toolchain
             kernel_env['REPL_SWIFT_PATH'] = '%s/usr/bin/repl_swift' % args.swift_toolchain
             kernel_env['SWIFT_BUILD_PATH'] = '%s/usr/bin/swift-build' % args.swift_toolchain
@@ -61,6 +65,13 @@ def make_kernel_env(args):
             kernel_env['PYTHONPATH'] = '%s/System/Library/PrivateFrameworks/LLDB.framework/Resources/Python' % args.swift_toolchain
             kernel_env['LD_LIBRARY_PATH'] = '%s/usr/lib/swift/macosx' % args.swift_toolchain
             kernel_env['REPL_SWIFT_PATH'] = '%s/System/Library/PrivateFrameworks/LLDB.framework/Resources/repl_swift' % args.swift_toolchain
+        elif platform.system() == 'Windows':
+            kernel_env['PYTHONPATH'] = os.path.join('%s','usr','lib','site-packages') % args.swift_toolchain
+            kernel_env['LD_LIBRARY_PATH'] = os.path.join(os.path.dirname(os.path.dirname(args.swift_toolchain)),
+                                                        'Platforms','Windows.platform','Developer','Library','XCTest-development',
+                                                        'usr','lib','swift')
+            kernel_env['REPL_SWIFT_PATH'] = os.path.join('%s','usr','bin','repl_swift.exe') % args.swift_toolchain
+            
         else:
             raise Exception('Unknown system %s' % platform.system())
 
@@ -74,8 +85,7 @@ def make_kernel_env(args):
         swift_build_dir = '%s/swift-linux-x86_64' % args.swift_build
         lldb_build_dir = '%s/lldb-linux-x86_64' % args.swift_build
 
-        kernel_env['PYTHONPATH'] = '%s/%s' % (lldb_build_dir,
-                                              linux_lldb_python_lib_subdir())
+        kernel_env['PYTHONPATH'] = linux_pythonpath(lldb_build_dir)
         kernel_env['LD_LIBRARY_PATH'] = '%s/lib/swift/linux' % swift_build_dir
         kernel_env['REPL_SWIFT_PATH'] = '%s/bin/repl_swift' % lldb_build_dir
 
@@ -97,21 +107,37 @@ def make_kernel_env(args):
     if args.swift_python_library is not None:
         kernel_env['PYTHON_LIBRARY'] = args.swift_python_library
     if args.swift_python_use_conda:
-        libpython = glob(sys.prefix+'/lib/libpython*.so')[0]
+        if platform.system() == 'Darwin':
+            libpython = glob(sys.prefix+'/lib/libpython*.dylib')[0]
+        elif platform.system() == 'Linux':
+            libpython = glob(sys.prefix+'/lib/libpython*.so')[0]
+        elif platform.system() == 'Windows':
+            libpython = glob(sys.prefix+'/python*.dll')[0]
+        else:
+            raise Exception('Unable to find libpython for system %s' % platform.system())
+
         kernel_env['PYTHON_LIBRARY'] = libpython
 
     if args.use_conda_shared_libs:
-        kernel_env['LD_LIBRARY_PATH'] += ':' + sys.prefix + '/lib'
+        if platform.system() != 'Windows': # ':' is used after drive letter in Windows
+            kernel_env['LD_LIBRARY_PATH'] += ':' + sys.prefix + '/lib'
+        else:
+            kernel_env['LD_LIBRARY_PATH'] += ';' + os.path.join(sys.prefix, 'lib')
 
     return kernel_env
 
 
 def validate_kernel_env(kernel_env):
     """Validates that the env vars refer to things that actually exist."""
-
-    if not os.path.isfile(kernel_env['PYTHONPATH'] + '/lldb/_lldb.so'):
-        raise Exception('lldb python libs not found at %s' %
-                        kernel_env['PYTHONPATH'])
+    # TODO: if not /lldb/_lldb.*
+    if platform.system() == 'Windows':
+        if not os.path.isfile(kernel_env['PYTHONPATH'] + '/lldb/_lldb.pyd'):
+            raise Exception('lldb python libs not found at %s' %
+                            kernel_env['PYTHONPATH'])
+    else:
+        if not os.path.isfile(kernel_env['PYTHONPATH'] + '/lldb/_lldb.so'):
+            raise Exception('lldb python libs not found at %s' %
+                            kernel_env['PYTHONPATH'])
     if not os.path.isfile(kernel_env['REPL_SWIFT_PATH']):
         raise Exception('repl_swift binary not found at %s' %
                         kernel_env['REPL_SWIFT_PATH'])
@@ -128,7 +154,8 @@ def validate_kernel_env(kernel_env):
         raise Exception('python library not found at %s' %
                         kernel_env['PYTHON_LIBRARY'])
 
-    lib_paths = kernel_env['LD_LIBRARY_PATH'].split(':')
+    lib_paths = kernel_env['LD_LIBRARY_PATH'].split(':') if platform.system() != 'Windows' else \
+                                                            kernel_env['LD_LIBRARY_PATH'].split(';') # ':' proceeds after drive letter in Windows
     for index, lib_path in enumerate(lib_paths):
         if os.path.isdir(lib_path):
             continue
@@ -137,7 +164,6 @@ def validate_kernel_env(kernel_env):
             raise Exception('swift libs not found at %s' % lib_path)
         # Other LD_LIBRARY_PATHs may be appended for other libs.
         raise Exception('shared lib dir not found at %s' % lib_path)
-
 
 def main():
     args = parse_args()
@@ -148,7 +174,7 @@ def main():
     kernel_json = {
         'argv': [
             sys.executable,
-            '%s/parent_kernel.py' % script_dir,
+            os.path.join(script_dir,'parent_kernel.py'),
             '-f',
             '{connection_file}',
         ],

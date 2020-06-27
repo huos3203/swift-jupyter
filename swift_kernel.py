@@ -662,10 +662,17 @@ class SwiftKernel(Kernel):
 
         # == Ask SwiftPM to build the package ==
 
+        # TODO(TF-1179): Remove this workaround after fixing SwiftPM.
+        swiftpm_env = os.environ
+        libuuid_path = '/lib/x86_64-linux-gnu/libuuid.so.1'
+        if os.path.isfile(libuuid_path):
+            swiftpm_env['LD_PRELOAD'] = libuuid_path
+
         build_p = subprocess.Popen([swift_build_path] + swiftpm_flags,
                                    stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT,
-                                   cwd=package_base_path)
+                                   cwd=package_base_path,
+                                   env=swiftpm_env)
         for build_output_line in iter(build_p.stdout.readline, b''):
             self.send_response(self.iopub_socket, 'stream', {
                 'name': 'stdout',
@@ -680,21 +687,28 @@ class SwiftKernel(Kernel):
         show_bin_path_result = subprocess.run(
                 [swift_build_path, '--show-bin-path'] + swiftpm_flags,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                cwd=package_base_path)
+                cwd=package_base_path,
+                env=swiftpm_env)
         bin_dir = show_bin_path_result.stdout.decode('utf8').strip()
         lib_filename = os.path.join(bin_dir, 'libjupyterInstalledPackages.so')
 
         # == Copy .swiftmodule and modulemap files to SWIFT_IMPORT_SEARCH_PATH ==
 
-        build_db_file = os.path.join(package_base_path, '.build', 'build.db')
-        if not os.path.exists(build_db_file):
+        # Search for build.db.
+        build_db_candidates = [
+            os.path.join(bin_dir, '..', 'build.db'),
+            os.path.join(package_base_path, '.build', 'build.db'),
+        ]
+        build_db_file = next(filter(os.path.exists, build_db_candidates), None)
+        if build_db_file is None:
             raise PackageInstallException('build.db is missing')
 
         # Execute swift-package show-dependencies to get all dependencies' paths
         dependencies_result = subprocess.run(
             [swift_package_path, 'show-dependencies', '--format', 'json'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            cwd=package_base_path)
+            cwd=package_base_path,
+            env=swiftpm_env)
         dependencies_json = dependencies_result.stdout.decode('utf8')
         dependencies_obj = json.loads(dependencies_json)
 
@@ -772,6 +786,7 @@ class SwiftKernel(Kernel):
 
         dynamic_load_code = textwrap.dedent("""\
             import func Glibc.dlopen
+            import var Glibc.RTLD_NOW
             dlopen(%s, RTLD_NOW)
         """ % json.dumps(lib_filename))
         dynamic_load_result = self._execute(dynamic_load_code)
@@ -829,13 +844,13 @@ class SwiftKernel(Kernel):
         return [self._read_byte_array(part) for part in sbvalue]
 
     def _read_byte_array(self, sbvalue):
-        get_position_error = lldb.SBError()
-        position = sbvalue \
-                .GetChildMemberWithName('_position') \
+        get_address_error = lldb.SBError()
+        address = sbvalue \
+                .GetChildMemberWithName('address') \
                 .GetData() \
-                .GetAddress(get_position_error, 0)
-        if get_position_error.Fail():
-            raise Exception('getting position: %s' % str(get_position_error))
+                .GetAddress(get_address_error, 0)
+        if get_address_error.Fail():
+            raise Exception('getting address: %s' % str(get_address_error))
 
         get_count_error = lldb.SBError()
         count_data = sbvalue \
@@ -857,7 +872,7 @@ class SwiftKernel(Kernel):
             return bytes()
 
         get_data_error = lldb.SBError()
-        data = self.process.ReadMemory(position, count, get_data_error)
+        data = self.process.ReadMemory(address, count, get_data_error)
         if get_data_error.Fail():
             raise Exception('getting data: %s' % str(get_data_error))
 
@@ -1050,7 +1065,8 @@ if __name__ == '__main__':
     # Jupyter sends us SIGINT when the user requests execution interruption.
     # Here, we block all threads from receiving the SIGINT, so that we can
     # handle it in a specific handler thread.
-    signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGINT])
+    if hasattr(signal, 'pthread_sigmask'): # Not supported in Windows
+        signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGINT])
 
     from ipykernel.kernelapp import IPKernelApp
     # We pass the kernel name as a command-line arg, since Jupyter gives those

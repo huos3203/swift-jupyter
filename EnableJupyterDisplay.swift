@@ -123,13 +123,10 @@ enum JupyterDisplay {
         }
     }
 
-    struct MessageContent: Encodable {
+    struct MessageContent<Data>: Encodable where Data: Encodable {
         let metadata = "{}"
         let transient = "{}"
-        let data: PNGImageData
-        init(base64EncodedPNG: String) {
-            data = PNGImageData(base64EncodedPNG: base64EncodedPNG)
-        }
+        let data: Data
         var json: String {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -177,9 +174,22 @@ extension JupyterDisplay {
     }
 }
 
-JupyterDisplay.enable()
-
 func display(base64EncodedPNG: String) {
-    let data = JupyterDisplay.MessageContent(base64EncodedPNG: base64EncodedPNG).json
+    let pngData = JupyterDisplay.PNGImageData(base64EncodedPNG: base64EncodedPNG)
+    let data = JupyterDisplay.MessageContent(data: pngData).json
     JupyterDisplay.messages.append(JupyterDisplay.Message(content: data))
 }
+
+#if canImport(SwiftPlot)
+import SwiftPlot
+import AGGRenderer
+var __agg_renderer = AGGRenderer()
+extension Plot {
+  func display(size: Size = Size(width: 1000, height: 660)) {
+    drawGraph(size: size, renderer: __agg_renderer)
+    display(base64EncodedPNG: __agg_renderer.base64Png())
+  }
+}
+#endif
+
+JupyterDisplay.enable()
