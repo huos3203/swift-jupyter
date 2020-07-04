@@ -42,7 +42,7 @@ webencodings
 widgetsnbextension
 jupyterlab
 jupyterlab_templates
-jupyterlab-git
+#jupyterlab-git
 knowledge-repo[all]
 jupyter
 pandas
